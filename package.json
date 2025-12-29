@@ -1,0 +1,61 @@
+{
+  "name": "prisma-consistent-ordering-assertions",
+  "version": "0.1.0",
+  "description": "Prisma extension for detecting deadlock risks by tracking table and row locking order",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run clean && npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:push": "prisma db push",
+    "db:generate": "prisma generate",
+    "db:setup": "npm run db:up && sleep 2 && npm run db:push"
+  },
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@prisma/client": "^7.0.0"
+  },
+  "dependencies": {
+    "@dagrejs/graphlib": "^2.2.4"
+  },
+  "devDependencies": {
+    "@prisma/adapter-pg": "^7.2.0",
+    "@prisma/client": "^7.0.0",
+    "@types/node": "^22.0.0",
+    "dotenv": "^17.2.3",
+    "pg": "^8.16.3",
+    "prisma": "^7.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "keywords": [
+    "prisma",
+    "deadlock",
+    "testing",
+    "row-locking",
+    "transaction"
+  ],
+  "license": "MIT"
+}
