@@ -24,7 +24,12 @@
     "db:down": "docker compose down",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
-    "db:setup": "npm run db:up && sleep 2 && npm run db:push"
+    "db:setup": "npm run db:up && sleep 2 && npm run db:push",
+    "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s",
+    "release:patch": "npm run changelog && git add CHANGELOG.md && git commit -m \"chore: update changelog\" && npm version patch && git push --follow-tags && npm run build && npm publish",
+    "release:minor": "npm run changelog && git add CHANGELOG.md && git commit -m \"chore: update changelog\" && npm version minor && git push --follow-tags && npm run build && npm publish",
+    "release:major": "npm run changelog && git add CHANGELOG.md && git commit -m \"chore: update changelog\" && npm version major && git push --follow-tags && npm run build && npm publish",
+    "release:dry": "npm run changelog -- --dry-run"
   },
   "engines": {
     "node": ">=18.18.0"
@@ -44,6 +49,7 @@
     "@prisma/adapter-pg": "^7.2.0",
     "@prisma/client": "^7.0.0",
     "@types/node": "^22.0.0",
+    "conventional-changelog-cli": "^5.0.0",
     "dotenv": "^17.2.3",
     "pg": "^8.16.3",
     "prisma": "^7.0.0",
@@ -57,5 +63,14 @@
     "row-locking",
     "transaction"
   ],
-  "license": "MIT"
+  "license": "NoHarm",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mosaic-sunrise/prisma-deadlock-avoidance-tests.git"
+  },
+  "homepage": "https://github.com/mosaic-sunrise/prisma-deadlock-avoidance-tests#readme",
+  "bugs": {
+    "url": "https://github.com/mosaic-sunrise/prisma-deadlock-avoidance-tests/issues"
+  },
+  "author": "Chris Jensen <2920476+chrisjensen@users.noreply.github.com> (https://github.com/chrisjensen)"
 }
