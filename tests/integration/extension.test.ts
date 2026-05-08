@@ -1,55 +1,35 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
-import { PrismaClient } from '@prisma/client'
-import { PrismaPg } from '@prisma/adapter-pg'
-import pg from 'pg'
-import crypto from 'node:crypto'
 import {
-  withDeadlockDetection,
   assertConsistentTableLocking,
   assertConsistentRowLocking,
   assertNoDeadlockRisk,
   resetDeadlockDetection,
-  withOperationTracking,
   TableLockingAssertionError,
 } from '../../src/index.js'
-
-// Load environment variables
-import 'dotenv/config'
-
-const { Pool } = pg
-
-function uniqueEmail(prefix = 'test'): string {
-  return `${prefix}-${crypto.randomUUID()}@example.com`
-}
+import {
+  uniqueEmail,
+  setupTestEnvironment,
+  cleanupTestData,
+  teardownTestEnvironment,
+} from '../helpers/prisma-setup.js'
+import type pg from 'pg'
 
 describe('Prisma Deadlock Detection Extension', () => {
   let pool: pg.Pool
-  let prisma: ReturnType<typeof createPrisma>
-
-  function createPrisma() {
-    const adapter = new PrismaPg(pool)
-    return new PrismaClient({ adapter }).$extends(withDeadlockDetection())
-  }
+  let prisma: Awaited<ReturnType<typeof setupTestEnvironment>>['prisma']
 
   beforeAll(async () => {
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-    })
-    prisma = createPrisma()
+    const env = await setupTestEnvironment()
+    pool = env.pool
+    prisma = env.prisma
   })
 
   afterAll(async () => {
-    await prisma.$disconnect()
-    await pool.end()
+    await teardownTestEnvironment(prisma, pool)
   })
 
   beforeEach(async () => {
-    // Clean up test data first
-    await prisma.task.deleteMany()
-    await prisma.post.deleteMany()
-    await prisma.user.deleteMany()
-    // Reset detection state AFTER cleanup so cleanup operations don't pollute the graph
-    resetDeadlockDetection()
+    await cleanupTestData(prisma)
   })
 
   describe('basic functionality', () => {
@@ -86,18 +66,16 @@ describe('Prisma Deadlock Detection Extension', () => {
       })
 
       // Transaction 1: User -> Post
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          await tx.user.update({
-            where: { id: user1.id },
-            data: { name: 'Updated User 1' },
-          })
-          await tx.post.create({
-            data: {
-              title: 'Post 1',
-              authorId: user1.id,
-            },
-          })
+      await prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: user1.id },
+          data: { name: 'Updated User 1' },
+        })
+        await tx.post.create({
+          data: {
+            title: 'Post 1',
+            authorId: user1.id,
+          },
         })
       })
 
@@ -107,18 +85,16 @@ describe('Prisma Deadlock Detection Extension', () => {
       })
 
       // Transaction 2: User -> Post (same order)
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          await tx.user.update({
-            where: { id: user2.id },
-            data: { name: 'Updated User 2' },
-          })
-          await tx.post.create({
-            data: {
-              title: 'Post 2',
-              authorId: user2.id,
-            },
-          })
+      await prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: user2.id },
+          data: { name: 'Updated User 2' },
+        })
+        await tx.post.create({
+          data: {
+            title: 'Post 2',
+            authorId: user2.id,
+          },
         })
       })
 
@@ -133,18 +109,16 @@ describe('Prisma Deadlock Detection Extension', () => {
       })
 
       // Transaction 1: User -> Post
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          await tx.user.update({
-            where: { id: user1.id },
-            data: { name: 'Updated User 1' },
-          })
-          await tx.post.create({
-            data: {
-              title: 'Post 1',
-              authorId: user1.id,
-            },
-          })
+      await prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: user1.id },
+          data: { name: 'Updated User 1' },
+        })
+        await tx.post.create({
+          data: {
+            title: 'Post 1',
+            authorId: user1.id,
+          },
         })
       })
 
@@ -161,16 +135,14 @@ describe('Prisma Deadlock Detection Extension', () => {
       })
 
       // Transaction 2: Post -> User (opposite order - creates cycle)
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          await tx.post.update({
-            where: { id: post2.id },
-            data: { title: 'Updated Post 2' },
-          })
-          await tx.user.update({
-            where: { id: user2.id },
-            data: { name: 'Updated User 2' },
-          })
+      await prisma.$transaction(async (tx) => {
+        await tx.post.update({
+          where: { id: post2.id },
+          data: { title: 'Updated Post 2' },
+        })
+        await tx.user.update({
+          where: { id: user2.id },
+          data: { name: 'Updated User 2' },
         })
       })
 
@@ -196,16 +168,14 @@ describe('Prisma Deadlock Detection Extension', () => {
       const users = [userA, userB, userC]
 
       // Update in ascending ID order
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          const sortedUsers = [...users].sort((a, b) => a.id - b.id)
-          for (const user of sortedUsers) {
-            await tx.user.update({
-              where: { id: user.id },
-              data: { name: `Updated ${user.name}` },
-            })
-          }
-        })
+      await prisma.$transaction(async (tx) => {
+        const sortedUsers = [...users].sort((a, b) => a.id - b.id)
+        for (const user of sortedUsers) {
+          await tx.user.update({
+            where: { id: user.id },
+            data: { name: `Updated ${user.name}` },
+          })
+        }
       })
 
       // Should not throw with strict: false
@@ -230,15 +200,13 @@ describe('Prisma Deadlock Detection Extension', () => {
         data: { email: uniqueEmail(), name: 'Test' },
       })
 
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          await tx.user.update({
-            where: { id: user.id },
-            data: { name: 'Updated' },
-          })
-          await tx.post.create({
-            data: { title: 'Post', authorId: user.id },
-          })
+      await prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: user.id },
+          data: { name: 'Updated' },
+        })
+        await tx.post.create({
+          data: { title: 'Post', authorId: user.id },
         })
       })
 
@@ -258,16 +226,14 @@ describe('Prisma Deadlock Detection Extension', () => {
         },
       })
 
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          await tx.post.update({
-            where: { id: post.id },
-            data: { title: 'Updated Post' },
-          })
-          await tx.user.update({
-            where: { id: post.authorId },
-            data: { name: 'Updated Author' },
-          })
+      await prisma.$transaction(async (tx) => {
+        await tx.post.update({
+          where: { id: post.id },
+          data: { title: 'Updated Post' },
+        })
+        await tx.user.update({
+          where: { id: post.authorId },
+          data: { name: 'Updated Author' },
         })
       })
 
@@ -282,13 +248,11 @@ describe('Prisma Deadlock Detection Extension', () => {
         data: { email: uniqueEmail(), name: 'Test User' },
       })
 
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          // Use $queryRaw with SELECT FOR UPDATE
-          await tx.$queryRaw`SELECT * FROM "User" WHERE id = ${user.id} FOR UPDATE`
-          await tx.post.create({
-            data: { title: 'Test Post', authorId: user.id },
-          })
+      await prisma.$transaction(async (tx) => {
+        // Use $queryRaw with SELECT FOR UPDATE
+        await tx.$queryRaw`SELECT * FROM "User" WHERE id = ${user.id} FOR UPDATE`
+        await tx.post.create({
+          data: { title: 'Test Post', authorId: user.id },
         })
       })
 
@@ -301,13 +265,11 @@ describe('Prisma Deadlock Detection Extension', () => {
         data: { email: uniqueEmail(), name: 'Test User' },
       })
 
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          // Use $executeRaw with UPDATE
-          await tx.$executeRaw`UPDATE "User" SET name = ${'Updated'} WHERE id = ${user.id}`
-          await tx.post.create({
-            data: { title: 'Test Post', authorId: user.id },
-          })
+      await prisma.$transaction(async (tx) => {
+        // Use $executeRaw with UPDATE
+        await tx.$executeRaw`UPDATE "User" SET name = ${'Updated'} WHERE id = ${user.id}`
+        await tx.post.create({
+          data: { title: 'Test Post', authorId: user.id },
         })
       })
 
@@ -321,12 +283,10 @@ describe('Prisma Deadlock Detection Extension', () => {
       })
 
       // Transaction 1: User -> Post
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`UPDATE "User" SET name = ${'Updated'} WHERE id = ${user1.id}`
-          await tx.post.create({
-            data: { title: 'Post 1', authorId: user1.id },
-          })
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`UPDATE "User" SET name = ${'Updated'} WHERE id = ${user1.id}`
+        await tx.post.create({
+          data: { title: 'Post 1', authorId: user1.id },
         })
       })
 
@@ -338,11 +298,9 @@ describe('Prisma Deadlock Detection Extension', () => {
       })
 
       // Transaction 2: Post -> User (opposite order - creates cycle)
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`UPDATE "Post" SET title = ${'Updated'} WHERE id = ${post2.id}`
-          await tx.$queryRaw`UPDATE "User" SET name = ${'Updated'} WHERE id = ${user2.id}`
-        })
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`UPDATE "Post" SET title = ${'Updated'} WHERE id = ${post2.id}`
+        await tx.$queryRaw`UPDATE "User" SET name = ${'Updated'} WHERE id = ${user2.id}`
       })
 
       // Should throw - inconsistent ordering
@@ -356,16 +314,14 @@ describe('Prisma Deadlock Detection Extension', () => {
         data: { email: uniqueEmail(), name: 'Test User' },
       })
 
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          // Use $queryRawUnsafe
-          await tx.$queryRawUnsafe(
-            `SELECT * FROM "User" WHERE id = $1 FOR UPDATE`,
-            user.id
-          )
-          await tx.post.create({
-            data: { title: 'Test Post', authorId: user.id },
-          })
+      await prisma.$transaction(async (tx) => {
+        // Use $queryRawUnsafe
+        await tx.$queryRawUnsafe(
+          `SELECT * FROM "User" WHERE id = $1 FOR UPDATE`,
+          user.id
+        )
+        await tx.post.create({
+          data: { title: 'Test Post', authorId: user.id },
         })
       })
 
@@ -378,17 +334,15 @@ describe('Prisma Deadlock Detection Extension', () => {
         data: { email: uniqueEmail(), name: 'Test User' },
       })
 
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          // Use $executeRawUnsafe
-          await tx.$executeRawUnsafe(
-            `UPDATE "User" SET name = $1 WHERE id = $2`,
-            'Updated',
-            user.id
-          )
-          await tx.post.create({
-            data: { title: 'Test Post', authorId: user.id },
-          })
+      await prisma.$transaction(async (tx) => {
+        // Use $executeRawUnsafe
+        await tx.$executeRawUnsafe(
+          `UPDATE "User" SET name = $1 WHERE id = $2`,
+          'Updated',
+          user.id
+        )
+        await tx.post.create({
+          data: { title: 'Test Post', authorId: user.id },
         })
       })
 
@@ -401,13 +355,11 @@ describe('Prisma Deadlock Detection Extension', () => {
         data: { email: uniqueEmail(), name: 'Test User' },
       })
 
-      await withOperationTracking(async () => {
-        await prisma.$transaction(async (tx) => {
-          // Quoted table name should be recognized
-          await tx.$queryRaw`UPDATE "User" SET name = ${'Updated'} WHERE id = ${user.id}`
-          await tx.post.create({
-            data: { title: 'Test Post', authorId: user.id },
-          })
+      await prisma.$transaction(async (tx) => {
+        // Quoted table name should be recognized
+        await tx.$queryRaw`UPDATE "User" SET name = ${'Updated'} WHERE id = ${user.id}`
+        await tx.post.create({
+          data: { title: 'Test Post', authorId: user.id },
         })
       })
 

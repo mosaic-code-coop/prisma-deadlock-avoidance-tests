@@ -4,7 +4,13 @@ A Prisma extension for detecting deadlock risks by tracking table and row lockin
 
 ## Purpose
 
-Database deadlocks occur when two transactions lock resources in opposite orders. This library helps detect potential deadlock risks by:
+Database deadlocks are a structural problem that occur when different code paths lock resources in conflicting orders. In a real application, deadlocks often emerge from the interaction between multiple unrelated parts of the codebase—each following its own locking pattern—that only reveal themselves when those paths execute concurrently under load.
+
+This library helps ensure your codebase applies deadlock-prevention best practices before these issues become production problems. It does this by building a holistic graph of every table and row lock ordering across your entire test suite. By accumulating data from all tests, it can detect when different parts of your application would lock resources in ways that could deadlock.
+
+**NOTE**: The library only works effectively when allowed to collect data continuously through your whole test suite. Configure it before your first test runs, check the risks its identified at the end of all tests.
+
+The library detects two types of deadlock risk:
 
 1. **Table ordering detection** - Identifies when different code paths lock tables in inconsistent orders
 2. **Row ordering detection** - Identifies when rows within a table are locked in inconsistent orders
@@ -21,30 +27,27 @@ npm install prisma-consistent-ordering-assertions
 import { PrismaClient } from '@prisma/client'
 import {
   withDeadlockDetection,
-  withOperationTracking,
   assertNoDeadlockRisk,
   resetDeadlockDetection,
 } from 'prisma-consistent-ordering-assertions'
 
-// Extend your Prisma client
-const prisma = new PrismaClient().$extends(withDeadlockDetection())
+// Wrap your Prisma client - transactions are tracked automatically
+const prisma = withDeadlockDetection(new PrismaClient())
 
-// In your tests, wrap transactions to track table ordering
-await withOperationTracking(async () => {
-  await prisma.$transaction(async (tx) => {
-    await tx.user.update({ where: { id: 1 }, data: { name: 'Updated' } })
-    await tx.post.create({ data: { title: 'New Post', authorId: 1 } })
-  })
+// At the start of your test run, clear any previous data
+beforeAll(() => {
+  resetDeadlockDetection()
+})
+
+// Your transactions are tracked automatically
+await prisma.$transaction(async (tx) => {
+  await tx.user.update({ where: { id: 1 }, data: { name: 'Updated' } })
+  await tx.post.create({ data: { title: 'New Post', authorId: 1 } })
 })
 
 // At the end of your test suite, check for deadlock risks
 afterAll(() => {
   assertNoDeadlockRisk()
-})
-
-// Reset between test files if needed
-beforeEach(() => {
-  resetDeadlockDetection()
 })
 ```
 
@@ -52,45 +55,29 @@ beforeEach(() => {
 
 ### Extension
 
-#### `withDeadlockDetection(config?)`
+#### `withDeadlockDetection(client, config?)`
 
-Creates a Prisma extension that tracks locking operations.
+Wraps a Prisma client with deadlock detection. All transactions are automatically tracked.
 
 ```typescript
-const prisma = new PrismaClient().$extends(withDeadlockDetection())
+const prisma = withDeadlockDetection(new PrismaClient())
 
 // Optional: disable tracking
-const prisma = new PrismaClient().$extends(withDeadlockDetection({ enabled: false }))
+const prisma = withDeadlockDetection(new PrismaClient(), { enabled: false })
 ```
 
 ### Tracking Functions
-
-#### `withOperationTracking(fn)`
-
-Wraps a function (typically containing a `$transaction`) to track table lock ordering within it.
-
-```typescript
-await withOperationTracking(async () => {
-  await prisma.$transaction(async (tx) => {
-    // Operations here are tracked for table ordering
-    await tx.user.update({ ... })
-    await tx.post.create({ ... })
-  })
-})
-```
 
 #### `trackForUpdate(model, fn)`
 
 Wrapper for integrating with [prisma-lock-for-update](https://github.com/mosaic-sunrise/prisma-select-for-update). Use this to track SELECT FOR UPDATE operations.
 
 ```typescript
-await withOperationTracking(async () => {
-  await prisma.$transaction(async (tx) => {
-    const user = await trackForUpdate('User', () =>
-      tx.user.findUniqueForUpdate({ where: { id: 1 } })
-    )
-    await tx.post.update({ where: { id: postId }, data: { ... } })
-  })
+await prisma.$transaction(async (tx) => {
+  const user = await trackForUpdate('User', () =>
+    tx.user.findUniqueForUpdate({ where: { id: 1 } })
+  )
+  await tx.post.update({ where: { id: postId }, data: { ... } })
 })
 ```
 
@@ -143,17 +130,15 @@ assertNoDeadlockRisk({ strict: 'ASC' })
 
 #### `resetDeadlockDetection()`
 
-Clears all tracked state. Call this between test runs if needed.
+Clears all tracked state. Use this to start fresh when beginning a new test run (e.g., in CI or when manually re-running tests).
+
+**Important**: Do NOT call this between test files. The library needs to accumulate data across your entire test suite to detect cross-file deadlock risks.
 
 ```typescript
-beforeEach(() => {
+beforeAll(() => {
   resetDeadlockDetection()
 })
 ```
-
-#### `startOperationBatch()` / `endOperationBatch()`
-
-Low-level functions for manually controlling operation batch boundaries. Prefer `withOperationTracking()` instead.
 
 ## Error Types
 
@@ -215,29 +200,26 @@ Locking operations tracked:
 
 ## Best Practices
 
-1. **Reset between test files** - Call `resetDeadlockDetection()` in `beforeEach` or `beforeAll`
+1. **Don't reset between test files** - The library needs to accumulate data across your entire test suite to detect cross-file deadlock risks. Only reset when starting a completely fresh test run (e.g., in CI or when manually re-running tests).
 
-2. **Wrap all transactions** - Use `withOperationTracking()` around every `$transaction` call
+2. **Assert at end of suite** - Call `assertNoDeadlockRisk()` in a global `afterAll`
 
-3. **Assert at end of suite** - Call `assertNoDeadlockRisk()` in a global `afterAll`
-
-4. **Use with prisma-lock-for-update** - Wrap forUpdate calls with `trackForUpdate()`
+3. **Use with prisma-lock-for-update** - Wrap forUpdate calls with `trackForUpdate()`
 
 ## Example: Full Test Setup
 
 ```typescript
-import { describe, it, beforeEach, afterAll } from 'vitest'
+import { describe, it, beforeAll, afterAll } from 'vitest'
 import { PrismaClient } from '@prisma/client'
 import {
   withDeadlockDetection,
-  withOperationTracking,
   assertNoDeadlockRisk,
   resetDeadlockDetection,
 } from 'prisma-consistent-ordering-assertions'
 
-const prisma = new PrismaClient().$extends(withDeadlockDetection())
+const prisma = withDeadlockDetection(new PrismaClient())
 
-beforeEach(() => {
+beforeAll(() => {
   resetDeadlockDetection()
 })
 
@@ -247,11 +229,9 @@ afterAll(() => {
 
 describe('User operations', () => {
   it('updates user and creates post', async () => {
-    await withOperationTracking(async () => {
-      await prisma.$transaction(async (tx) => {
-        await tx.user.update({ where: { id: 1 }, data: { name: 'New' } })
-        await tx.post.create({ data: { title: 'Post', authorId: 1 } })
-      })
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: 1 }, data: { name: 'New' } })
+      await tx.post.create({ data: { title: 'Post', authorId: 1 } })
     })
   })
 })
@@ -265,4 +245,4 @@ describe('User operations', () => {
 
 ## License
 
-MIT
+[Do No Harm](https://github.com/raisely/NoHarm)

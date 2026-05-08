@@ -63,9 +63,9 @@ function getGlobalState(): GlobalStateInstance {
 
 /**
  * Start tracking a new transaction or batch of operations.
- * Call this at the start of a $transaction block to properly track table ordering.
+ * Called automatically when $transaction is invoked.
  */
-export function startOperationBatch(): void {
+function startOperationBatch(): void {
   const state = getGlobalState()
   state.currentOperationTables = []
   state.currentLockedRecords.clear()
@@ -74,9 +74,9 @@ export function startOperationBatch(): void {
 
 /**
  * End the current operation batch.
- * Call this at the end of a $transaction block.
+ * Called automatically when $transaction completes.
  */
-export function endOperationBatch(): void {
+function endOperationBatch(): void {
   const state = getGlobalState()
   state.currentOperationTables = []
   state.currentLockedRecords.clear()
@@ -85,20 +85,9 @@ export function endOperationBatch(): void {
 
 /**
  * Execute a function while tracking table ordering as a single batch.
- * This is useful for wrapping $transaction calls to properly track table order.
- * Automatically called by the $transaction override for interactive transactions.
- *
- * @example
- * ```typescript
- * await withOperationTracking(async () => {
- *   await prisma.$transaction(async (tx) => {
- *     await tx.user.update({ ... })
- *     await tx.post.create({ ... })
- *   })
- * })
- * ```
+ * Called automatically by the $transaction wrapper.
  */
-export async function withOperationTracking<T>(fn: () => Promise<T>): Promise<T> {
+async function withOperationTracking<T>(fn: () => Promise<T>): Promise<T> {
   startOperationBatch()
   try {
     return await fn()
@@ -227,16 +216,9 @@ function handleRawQuery(
 }
 
 /**
- * Create the Prisma extension for deadlock detection.
- *
- * Usage:
- * ```typescript
- * const prisma = new PrismaClient().$extends(withDeadlockDetection())
- * ```
+ * Create the internal Prisma extension for query interception.
  */
-export function withDeadlockDetection(config?: DeadlockDetectionConfig) {
-  const enabled = config?.enabled !== false
-
+function createDeadlockExtension(enabled: boolean) {
   return Prisma.defineExtension({
     name: 'prisma-deadlock-detection',
 
@@ -291,21 +273,36 @@ export function withDeadlockDetection(config?: DeadlockDetectionConfig) {
 }
 
 /**
- * Wrap a Prisma client to automatically track interactive transactions.
- * This creates a Proxy that intercepts $transaction calls and wraps them
- * with operation tracking.
+ * Wrap a Prisma client with deadlock detection.
+ * Automatically tracks table and row locking order across all transactions.
  *
  * Usage:
  * ```typescript
- * const prisma = wrapPrismaWithDeadlockDetection(
- *   new PrismaClient().$extends(withDeadlockDetection())
- * )
+ * const prisma = withDeadlockDetection(new PrismaClient())
  * ```
+ *
+ * @param client The PrismaClient instance to wrap
+ * @param config Optional configuration
+ * @returns A wrapped client with automatic transaction tracking
  */
-export function wrapPrismaWithDeadlockDetection<T extends PrismaClient>(
-  client: T
+export function withDeadlockDetection<T extends PrismaClient>(
+  client: T,
+  config?: DeadlockDetectionConfig
 ): T {
-  return new Proxy(client, {
+  if (process.env.NODE_ENV === 'production') {
+    console.warn(
+      '[prisma-consistent-ordering-assertions] WARNING: This library is intended for test environments only. ' +
+        'Running in production may impact performance.'
+    )
+  }
+
+  const enabled = config?.enabled !== false
+
+  // Apply the query interception extension
+  const extended = client.$extends(createDeadlockExtension(enabled)) as unknown as T
+
+  // Wrap with proxy to intercept $transaction calls
+  return new Proxy(extended, {
     get(target, prop) {
       if (prop === '$transaction') {
         // Return a wrapped $transaction method
@@ -315,12 +312,12 @@ export function wrapPrismaWithDeadlockDetection<T extends PrismaClient>(
           // Check if this is an interactive transaction (callback-based)
           const isInteractive = typeof args === 'function'
 
-          if (isInteractive) {
+          if (isInteractive && enabled) {
             // Automatically wrap the transaction callback with tracking
             return withOperationTracking(() => originalMethod.call(target, args))
           }
 
-          // Batch transaction or raw transaction - pass through
+          // Batch transaction, disabled, or raw transaction - pass through
           return originalMethod.call(target, args)
         }
       }
@@ -395,19 +392,7 @@ export async function trackForUpdate<T>(
   const state = getGlobalState()
 
   // Record the table lock
-  const caller = extractCaller()
-
-  // Create edges from all previously locked tables to this one
-  for (const prevTable of state.currentOperationTables) {
-    if (prevTable !== model) {
-      state.tableGraph.addEdge(prevTable, model, caller)
-    }
-  }
-
-  // Add this table to the current operation's locked tables
-  if (!state.currentOperationTables.includes(model)) {
-    state.currentOperationTables.push(model)
-  }
+  recordTableLock(model, state)
 
   // Execute the operation
   const result = await fn()

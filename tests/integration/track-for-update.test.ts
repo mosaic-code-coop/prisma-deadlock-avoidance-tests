@@ -1,54 +1,33 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
-import { PrismaClient } from '@prisma/client'
-import { PrismaPg } from '@prisma/adapter-pg'
-import pg from 'pg'
-import crypto from 'node:crypto'
 import {
-  withDeadlockDetection,
   trackForUpdate,
   assertConsistentTableLocking,
-  resetDeadlockDetection,
-  withOperationTracking,
   TableLockingAssertionError,
 } from '../../src/index.js'
-
-// Load environment variables
-import 'dotenv/config'
-
-const { Pool } = pg
-
-function uniqueEmail(prefix = 'test'): string {
-  return `${prefix}-${crypto.randomUUID()}@example.com`
-}
+import {
+  uniqueEmail,
+  setupTestEnvironment,
+  cleanupTestData,
+  teardownTestEnvironment,
+} from '../helpers/prisma-setup.js'
+import type pg from 'pg'
 
 describe('trackForUpdate integration', () => {
   let pool: pg.Pool
-  let prisma: ReturnType<typeof createPrisma>
-
-  function createPrisma() {
-    const adapter = new PrismaPg(pool)
-    return new PrismaClient({ adapter }).$extends(withDeadlockDetection())
-  }
+  let prisma: Awaited<ReturnType<typeof setupTestEnvironment>>['prisma']
 
   beforeAll(async () => {
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-    })
-    prisma = createPrisma()
+    const env = await setupTestEnvironment()
+    pool = env.pool
+    prisma = env.prisma
   })
 
   afterAll(async () => {
-    await prisma.$disconnect()
-    await pool.end()
+    await teardownTestEnvironment(prisma, pool)
   })
 
   beforeEach(async () => {
-    // Clean up test data first
-    await prisma.task.deleteMany()
-    await prisma.post.deleteMany()
-    await prisma.user.deleteMany()
-    // Reset detection state AFTER cleanup so cleanup operations don't pollute the graph
-    resetDeadlockDetection()
+    await cleanupTestData(prisma)
   })
 
   it('should track forUpdate operations', async () => {
@@ -57,23 +36,21 @@ describe('trackForUpdate integration', () => {
     })
 
     // Simulate using prisma-lock-for-update with trackForUpdate wrapper
-    await withOperationTracking(async () => {
-      await prisma.$transaction(async (tx) => {
-        // Track a "SELECT FOR UPDATE" style operation
-        const lockedUser = await trackForUpdate('User', async () => {
-          // In real usage, this would be tx.user.findUniqueForUpdate(...)
-          return tx.user.findUnique({ where: { id: user.id } })
-        })
+    await prisma.$transaction(async (tx) => {
+      // Track a "SELECT FOR UPDATE" style operation
+      const lockedUser = await trackForUpdate('User', async () => {
+        // In real usage, this would be tx.user.findUniqueForUpdate(...)
+        return tx.user.findUnique({ where: { id: user.id } })
+      })
 
-        expect(lockedUser).toBeDefined()
+      expect(lockedUser).toBeDefined()
 
-        // Then update Post
-        await tx.post.create({
-          data: {
-            title: 'New Post',
-            authorId: user.id,
-          },
-        })
+      // Then update Post
+      await tx.post.create({
+        data: {
+          title: 'New Post',
+          authorId: user.id,
+        },
       })
     })
 
@@ -91,28 +68,24 @@ describe('trackForUpdate integration', () => {
     })
 
     // Transaction 1: User -> Post
-    await withOperationTracking(async () => {
-      await prisma.$transaction(async (tx) => {
-        await trackForUpdate('User', async () => {
-          return tx.user.findUnique({ where: { id: user.id } })
-        })
-        await tx.post.update({
-          where: { id: post.id },
-          data: { title: 'Updated' },
-        })
+    await prisma.$transaction(async (tx) => {
+      await trackForUpdate('User', async () => {
+        return tx.user.findUnique({ where: { id: user.id } })
+      })
+      await tx.post.update({
+        where: { id: post.id },
+        data: { title: 'Updated' },
       })
     })
 
     // Transaction 2: Post -> User (opposite order)
-    await withOperationTracking(async () => {
-      await prisma.$transaction(async (tx) => {
-        await trackForUpdate('Post', async () => {
-          return tx.post.findUnique({ where: { id: post.id } })
-        })
-        await tx.user.update({
-          where: { id: user.id },
-          data: { name: 'Updated' },
-        })
+    await prisma.$transaction(async (tx) => {
+      await trackForUpdate('Post', async () => {
+        return tx.post.findUnique({ where: { id: post.id } })
+      })
+      await tx.user.update({
+        where: { id: user.id },
+        data: { name: 'Updated' },
       })
     })
 
@@ -132,18 +105,16 @@ describe('trackForUpdate integration', () => {
     })
     const users = [userA, userB]
 
-    await withOperationTracking(async () => {
-      await prisma.$transaction(async (tx) => {
-        // Track a findMany-style operation
-        const lockedUsers = await trackForUpdate('User', async () => {
-          return tx.user.findMany({
-            where: { id: { in: users.map((u) => u.id) } },
-            orderBy: { id: 'asc' },
-          })
+    await prisma.$transaction(async (tx) => {
+      // Track a findMany-style operation
+      const lockedUsers = await trackForUpdate('User', async () => {
+        return tx.user.findMany({
+          where: { id: { in: users.map((u) => u.id) } },
+          orderBy: { id: 'asc' },
         })
-
-        expect(lockedUsers).toHaveLength(2)
       })
+
+      expect(lockedUsers).toHaveLength(2)
     })
 
     // Should pass - no issues

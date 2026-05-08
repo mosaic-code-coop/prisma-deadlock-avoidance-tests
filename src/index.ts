@@ -1,5 +1,5 @@
 // Main extension
-export { withDeadlockDetection, wrapPrismaWithDeadlockDetection } from './extension.js'
+export { withDeadlockDetection } from './extension.js'
 
 // Assertion functions
 export {
@@ -8,9 +8,6 @@ export {
   assertNoDeadlockRisk,
   resetDeadlockDetection,
   trackForUpdate,
-  startOperationBatch,
-  endOperationBatch,
-  withOperationTracking,
 } from './extension.js'
 
 // Error types

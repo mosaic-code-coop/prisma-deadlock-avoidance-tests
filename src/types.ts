@@ -95,32 +95,6 @@ export interface RowEdgeLabel {
 }
 
 /**
- * State tracked for a single transaction
- */
-export interface TransactionState {
-  /** Unique identifier for this transaction */
-  id: string
-  /** Tables that have been locked in this transaction */
-  lockedTables: Set<string>
-  /** Rows that have been locked in this transaction, keyed by table */
-  lockedRows: Map<string, Set<string>>
-  /** Per-transaction table ordering graph */
-  tableGraph: Graph
-  /** Per-transaction row ordering graphs, keyed by table */
-  rowGraphs: Map<string, Graph>
-}
-
-/**
- * Global state for deadlock detection
- */
-export interface GlobalState {
-  /** Global table lock ordering graph */
-  tableGraph: Graph
-  /** Global row lock ordering graphs, keyed by table */
-  rowGraphs: Map<string, Graph>
-}
-
-/**
  * Configuration options for the deadlock detection extension
  */
 export interface DeadlockDetectionConfig {
