@@ -1,6 +1,6 @@
 import { Graph, alg } from '@dagrejs/graphlib'
 import type { CallerInfo, TableEdgeLabel, TableCycleInfo } from '../types.js'
-import { callerKey } from '../utils/caller-extractor.js'
+import { addCallerIfUnique } from '../utils/caller-extractor.js'
 
 /**
  * Manages a directed graph of table lock ordering.
@@ -33,13 +33,7 @@ export class TableLockGraph {
 
     if (existingLabel) {
       // Deduplicate callers by file:line
-      const key = callerKey(caller)
-      const alreadyExists = existingLabel.callers.some(
-        (c) => callerKey(c) === key
-      )
-      if (!alreadyExists) {
-        existingLabel.callers.push(caller)
-      }
+      addCallerIfUnique(existingLabel.callers, caller)
     } else {
       this.graph.setEdge(from, to, { callers: [caller] } satisfies TableEdgeLabel)
     }

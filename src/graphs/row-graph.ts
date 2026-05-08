@@ -1,6 +1,6 @@
 import { Graph, alg } from '@dagrejs/graphlib'
 import type { CallerInfo, RowEdgeLabel, RowCycleInfo, StrictMode } from '../types.js'
-import { callerKey } from '../utils/caller-extractor.js'
+import { addCallerIfUnique, callerKey } from '../utils/caller-extractor.js'
 
 /**
  * Manages directed graphs of row lock ordering, one per table.
@@ -58,13 +58,7 @@ export class RowLockGraphs {
 
       if (existingLabel) {
         // Deduplicate callers by file:line
-        const key = callerKey(caller)
-        const alreadyExists = existingLabel.callers.some(
-          (c) => callerKey(c) === key
-        )
-        if (!alreadyExists) {
-          existingLabel.callers.push(caller)
-        }
+        addCallerIfUnique(existingLabel.callers, caller)
       } else {
         graph.setEdge(from, to, {
           callers: [caller],
@@ -98,10 +92,10 @@ export class RowLockGraphs {
   }
 
   /**
-   * Check if all edges in a table's graph follow ascending order.
+   * Check if all edges in a table's graph follow the specified ordering direction.
    * Only makes sense for numeric/comparable primary keys.
    */
-  checkAscendingOrder(table: string): boolean {
+  private checkOrdering(table: string, direction: 'ASC' | 'DESC'): boolean {
     const graph = this.graphs.get(table)
     if (!graph) return true
 
@@ -111,12 +105,18 @@ export class RowLockGraphs {
       const toNum = Number(edge.w)
 
       if (!isNaN(fromNum) && !isNaN(toNum)) {
-        if (fromNum > toNum) {
+        if (direction === 'ASC' && fromNum > toNum) {
+          return false
+        }
+        if (direction === 'DESC' && fromNum < toNum) {
           return false
         }
       } else {
         // String comparison
-        if (edge.v > edge.w) {
+        if (direction === 'ASC' && edge.v > edge.w) {
+          return false
+        }
+        if (direction === 'DESC' && edge.v < edge.w) {
           return false
         }
       }
@@ -126,28 +126,18 @@ export class RowLockGraphs {
   }
 
   /**
+   * Check if all edges in a table's graph follow ascending order.
+   * Only makes sense for numeric/comparable primary keys.
+   */
+  checkAscendingOrder(table: string): boolean {
+    return this.checkOrdering(table, 'ASC')
+  }
+
+  /**
    * Check if all edges in a table's graph follow descending order.
    */
   checkDescendingOrder(table: string): boolean {
-    const graph = this.graphs.get(table)
-    if (!graph) return true
-
-    for (const edge of graph.edges()) {
-      const fromNum = Number(edge.v)
-      const toNum = Number(edge.w)
-
-      if (!isNaN(fromNum) && !isNaN(toNum)) {
-        if (fromNum < toNum) {
-          return false
-        }
-      } else {
-        if (edge.v < edge.w) {
-          return false
-        }
-      }
-    }
-
-    return true
+    return this.checkOrdering(table, 'DESC')
   }
 
   /**

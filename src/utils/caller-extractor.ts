@@ -47,8 +47,8 @@ function makeRelativePath(filePath: string): string {
 const IGNORE_PATTERNS = [
   /node_modules/,
   /\.prisma[\\/]client/,
-  /prisma-consistent-ordering-assertions[\\/](?:src|dist)[\\/]/,
-  /prisma-lock-for-update[\\/](?:src|dist)[\\/]/,
+  /prisma-deadlock-avoidance-tests[\\/](?:src|dist)[\\/]/,
+  /prisma-select-for-update[\\/](?:src|dist)[\\/]/,
   /\(node:/,
   /^node:/,
 ]
@@ -126,6 +126,21 @@ export function extractCaller(): CallerInfo {
  */
 export function callerKey(caller: CallerInfo): string {
   return `${caller.file}:${caller.line}`
+}
+
+/**
+ * Add a caller to an array if it's not already present (deduplicated by file:line).
+ * Modifies the array in place.
+ *
+ * @param callers Array of callers to add to
+ * @param caller Caller to add if unique
+ */
+export function addCallerIfUnique(callers: CallerInfo[], caller: CallerInfo): void {
+  const key = callerKey(caller)
+  const alreadyExists = callers.some((c) => callerKey(c) === key)
+  if (!alreadyExists) {
+    callers.push(caller)
+  }
 }
 
 /**
