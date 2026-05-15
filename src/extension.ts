@@ -291,7 +291,7 @@ export function withDeadlockDetection<T extends PrismaClient>(
 ): T {
   if (process.env.NODE_ENV === 'production') {
     console.warn(
-      '[prisma-consistent-ordering-assertions] WARNING: This library is intended for test environments only. ' +
+      '[@mosaic-code/prisma-deadlock-avoidance-tests] WARNING: This library is intended for test environments only. ' +
         'Running in production may impact performance.'
     )
   }

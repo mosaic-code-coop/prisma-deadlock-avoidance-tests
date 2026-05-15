@@ -1,4 +1,4 @@
-# prisma-consistent-ordering-assertions
+# @mosaic-code/prisma-deadlock-avoidance-tests
 
 A Prisma extension for detecting deadlock risks by tracking table and row locking order across transactions. Intended for use in test suites only.
 
@@ -18,7 +18,7 @@ The library detects two types of deadlock risk:
 ## Installation
 
 ```bash
-npm install prisma-consistent-ordering-assertions
+npm install @mosaic-code/prisma-deadlock-avoidance-tests
 ```
 
 ## Quick Start
@@ -29,7 +29,7 @@ import {
   withDeadlockDetection,
   assertNoDeadlockRisk,
   resetDeadlockDetection,
-} from 'prisma-consistent-ordering-assertions'
+} from '@mosaic-code/prisma-deadlock-avoidance-tests'
 
 // Wrap your Prisma client - transactions are tracked automatically
 const prisma = withDeadlockDetection(new PrismaClient())
@@ -70,7 +70,7 @@ const prisma = withDeadlockDetection(new PrismaClient(), { enabled: false })
 
 #### `trackForUpdate(model, fn)`
 
-Wrapper for integrating with [prisma-lock-for-update](https://github.com/mosaic-sunrise/prisma-select-for-update). Use this to track SELECT FOR UPDATE operations.
+Wrapper for integrating with [@mosaic-code/prisma-select-for-update](https://github.com/mosaic-code-coop/prisma-select-for-update). Use this to track SELECT FOR UPDATE operations.
 
 ```typescript
 await prisma.$transaction(async (tx) => {
@@ -215,7 +215,7 @@ import {
   withDeadlockDetection,
   assertNoDeadlockRisk,
   resetDeadlockDetection,
-} from 'prisma-consistent-ordering-assertions'
+} from '@mosaic-code/prisma-deadlock-avoidance-tests'
 
 const prisma = withDeadlockDetection(new PrismaClient())
 

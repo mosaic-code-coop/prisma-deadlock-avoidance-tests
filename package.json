@@ -1,6 +1,9 @@
 {
-  "name": "prisma-consistent-ordering-assertions",
+  "name": "@mosaic-code/prisma-deadlock-avoidance-tests",
   "version": "0.1.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Prisma extension for detecting deadlock risks by tracking table and row locking order",
   "type": "module",
   "main": "dist/index.js",
@@ -66,11 +69,11 @@
   "license": "NoHarm",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mosaic-sunrise/prisma-deadlock-avoidance-tests.git"
+    "url": "git+https://github.com/mosaic-code-coop/prisma-deadlock-avoidance-tests.git"
   },
-  "homepage": "https://github.com/mosaic-sunrise/prisma-deadlock-avoidance-tests#readme",
+  "homepage": "https://github.com/mosaic-code-coop/prisma-deadlock-avoidance-tests#readme",
   "bugs": {
-    "url": "https://github.com/mosaic-sunrise/prisma-deadlock-avoidance-tests/issues"
+    "url": "https://github.com/mosaic-code-coop/prisma-deadlock-avoidance-tests/issues"
   },
   "author": "Chris Jensen <2920476+chrisjensen@users.noreply.github.com> (https://github.com/chrisjensen)"
 }
