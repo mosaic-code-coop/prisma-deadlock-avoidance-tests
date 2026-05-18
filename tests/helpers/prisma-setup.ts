@@ -17,11 +17,18 @@ export function uniqueEmail(prefix = 'test'): string {
 }
 
 /**
- * Setup Prisma client with deadlock detection
+ * Setup Prisma client with deadlock detection.
+ *
+ * The library's own test suite runs under `vitest` (which sets VITEST_POOL_ID
+ * even with `singleFork: true`), but it does not exercise the parallel-mode
+ * file aggregation path. Suppress the parallel-mode misuse notice here so
+ * those single-fork tests aren't blocked by the safety check.
  */
 export function createPrisma(pool: pg.Pool) {
   const adapter = new PrismaPg(pool)
-  return withDeadlockDetection(new PrismaClient({ adapter }))
+  return withDeadlockDetection(new PrismaClient({ adapter }), {
+    onMissingParallelMode: 'silent',
+  })
 }
 
 /**

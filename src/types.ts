@@ -103,6 +103,31 @@ export interface DeadlockDetectionConfig {
 }
 
 /**
+ * Options for `withDeadlockDetection` controlling parallel-test-runner support.
+ */
+export interface DeadlockDetectionOptions extends DeadlockDetectionConfig {
+  /**
+   * Enable parallel-mode state sharing across worker processes.
+   * - `false` (default): single-process behavior.
+   * - `true`: force parallel mode on.
+   * - `'auto'`: enable iff a test-runner worker env var is detected
+   *   (`VITEST_POOL_ID`, `JEST_WORKER_ID`, `NODE_TEST_CONTEXT`). Safe to leave
+   *   on in single-process runs (no-op there).
+   */
+  parallel?: false | true | 'auto'
+
+  /**
+   * What to do when the library detects it is running inside a parallel test
+   * worker but parallel mode is off. Fires once, on the first lock recorded.
+   * - `'error'` (default): throw with instructions on how to enable parallel
+   *   mode or downgrade this to a warning.
+   * - `'warn'`: `console.warn` once and continue.
+   * - `'silent'`: do nothing.
+   */
+  onMissingParallelMode?: 'error' | 'warn' | 'silent'
+}
+
+/**
  * Model metadata from Prisma DMMF
  */
 export interface ModelMeta {

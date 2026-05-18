@@ -1,5 +1,5 @@
-import { Prisma, PrismaClient } from '@prisma/client'
-import type { DeadlockDetectionConfig, RowLockingOptions } from './types.js'
+import { Prisma } from '@prisma/client'
+import type { DeadlockDetectionOptions, RowLockingOptions } from './types.js'
 import { TableLockGraph } from './graphs/table-graph.js'
 import { RowLockGraphs } from './graphs/row-graph.js'
 import { extractCaller } from './utils/caller-extractor.js'
@@ -13,6 +13,25 @@ import {
   assertConsistentRowLocking as assertRowLocking,
   RowLockingAssertionError,
 } from './assertions/row-assertion.js'
+import {
+  aggregateAndAssert,
+  detectRunnerWorker,
+  enableParallelMode,
+  getDetectedRunnerEnv,
+  isCoordinatorContext,
+  isParallelModeActive,
+} from './parallel.js'
+
+/**
+ * Structural type for any Prisma client (base or already-extended) that we can
+ * wrap with deadlock detection. Both `$extends` and `$transaction` are
+ * preserved when extensions are applied, so we accept any object that has
+ * them.
+ */
+interface PrismaLike {
+  $extends: (extension: unknown) => unknown
+  $transaction: (...args: unknown[]) => unknown
+}
 
 /**
  * Operations that acquire locks on records
@@ -44,6 +63,36 @@ interface GlobalStateInstance {
 }
 
 let globalState: GlobalStateInstance | null = null
+
+/**
+ * What to do when the library detects it's running in a parallel test worker
+ * but parallel mode is off. Configured via `withDeadlockDetection` options.
+ */
+let onMissingParallelMode: 'error' | 'warn' | 'silent' = 'error'
+let missingNoticeFired = false
+
+function fireMissingParallelModeNoticeIfNeeded(): void {
+  if (missingNoticeFired) return
+  if (isParallelModeActive()) return
+  if (!detectRunnerWorker()) return
+
+  missingNoticeFired = true
+
+  if (onMissingParallelMode === 'silent') return
+
+  const envSig = getDetectedRunnerEnv()
+  const msg =
+    `[prisma-deadlock-detection] Detected parallel test worker (${envSig}) but ` +
+    `parallel mode is off. Cross-worker deadlock cycles will NOT be detected.\n\n` +
+    `Fix: pass { parallel: 'auto' } to withDeadlockDetection().\n` +
+    `To downgrade this error to a warning, use ` +
+    `{ parallel: false, onMissingParallelMode: 'warn' }.`
+
+  if (onMissingParallelMode === 'error') {
+    throw new Error(msg)
+  }
+  console.warn(msg)
+}
 
 /**
  * Get or create the global state instance
@@ -100,6 +149,7 @@ async function withOperationTracking<T>(fn: () => Promise<T>): Promise<T> {
  * Record a table lock, creating edges from previously locked tables in the current batch
  */
 function recordTableLock(table: string, state: GlobalStateInstance): void {
+  fireMissingParallelModeNoticeIfNeeded()
   const caller = extractCaller()
 
   // Create edges from all previously locked tables to this one
@@ -124,6 +174,7 @@ function recordRowOrdering(
   result: unknown,
   state: GlobalStateInstance
 ): void {
+  fireMissingParallelModeNoticeIfNeeded()
   const allKeys = extractPrimaryKeys(table, result)
   if (allKeys.length === 0) {
     return
@@ -285,9 +336,14 @@ function createDeadlockExtension(enabled: boolean) {
  * @param config Optional configuration
  * @returns A wrapped client with automatic transaction tracking
  */
-export function withDeadlockDetection<T extends PrismaClient>(
+// Unconstrained generic T: at runtime we only need `$extends` and
+// `$transaction` (both preserved through any layer of Prisma extensions),
+// but constraining `T` to a structural `PrismaLike` causes TS to widen the
+// inferred type to that minimum, losing the consumer's model methods.
+// Leaving T fully open keeps the input type intact through the wrapper.
+export function withDeadlockDetection<T>(
   client: T,
-  config?: DeadlockDetectionConfig
+  options?: DeadlockDetectionOptions
 ): T {
   if (process.env.NODE_ENV === 'production') {
     console.warn(
@@ -296,14 +352,36 @@ export function withDeadlockDetection<T extends PrismaClient>(
     )
   }
 
-  const enabled = config?.enabled !== false
+  const enabled = options?.enabled !== false
+
+  if (options?.onMissingParallelMode !== undefined) {
+    onMissingParallelMode = options.onMissingParallelMode
+  }
+
+  const parallelOpt = options?.parallel
+  const shouldEnableParallel =
+    parallelOpt === true || (parallelOpt === 'auto' && detectRunnerWorker())
+
+  if (shouldEnableParallel && enabled) {
+    enableParallelMode(() => {
+      const state = getGlobalState()
+      return {
+        table: state.tableGraph.toJSON(),
+        rows: state.rowGraphs.toJSON(),
+      }
+    })
+  }
+
+  // T is fully open for caller ergonomics; internally we know we need
+  // $extends and $transaction. Narrow once with `as PrismaLike`.
+  const prismaLike = client as PrismaLike
 
   // Apply the query interception extension
-  const extended = client.$extends(createDeadlockExtension(enabled)) as unknown as T
+  const extended = prismaLike.$extends(createDeadlockExtension(enabled)) as PrismaLike
 
   // Wrap with proxy to intercept $transaction calls
   return new Proxy(extended, {
-    get(target, prop) {
+    get(target: PrismaLike, prop: string | symbol) {
       if (prop === '$transaction') {
         // Return a wrapped $transaction method
         return function (args: unknown) {
@@ -323,19 +401,30 @@ export function withDeadlockDetection<T extends PrismaClient>(
       }
 
       // For all other properties, return the original value
-      const value = (target as Record<string, unknown>)[String(prop)]
+      const value = (target as unknown as Record<string, unknown>)[String(prop)]
 
       // If it's a function, bind it to the target
       return typeof value === 'function' ? value.bind(target) : value
     },
-  })
+  }) as T
 }
 
 /**
  * Assert that table locking has been consistent across all tracked operations.
  * Throws TableLockingAssertionError if a cycle is detected.
+ *
+ * In parallel mode:
+ * - Worker context: silent no-op (assertion deferred to coordinator).
+ * - Coordinator context: merges all worker state files and asserts on the
+ *   merged graph. Does NOT clean up state files (use `assertNoDeadlockRisk`
+ *   to clean up after both assertions pass).
  */
 export function assertConsistentTableLocking(): void {
+  if (detectRunnerWorker()) return
+  if (isCoordinatorContext()) {
+    aggregateAndAssert({ tableOnly: true })
+    return
+  }
   const state = getGlobalState()
   assertTableLocking(state.tableGraph)
 }
@@ -344,22 +433,42 @@ export function assertConsistentTableLocking(): void {
  * Assert that row locking has been consistent within tables.
  * Throws RowLockingAssertionError if violations are detected.
  *
+ * In parallel mode:
+ * - Worker context: silent no-op.
+ * - Coordinator context: merges all worker state files and asserts. Does NOT
+ *   clean up state files.
+ *
  * @param options Options controlling which tables to check and strictness mode
  */
 export function assertConsistentRowLocking(options?: RowLockingOptions): void {
+  if (detectRunnerWorker()) return
+  if (isCoordinatorContext()) {
+    aggregateAndAssert({ rowOnly: true, rowOptions: options })
+    return
+  }
   const state = getGlobalState()
   assertRowLocking(state.rowGraphs, options)
 }
 
 /**
  * Assert no deadlock risk exists by checking both table and row locking consistency.
- * This is a convenience function that calls both assertions.
+ *
+ * In parallel mode:
+ * - Worker context: silent no-op.
+ * - Coordinator context: merges all worker state files, asserts both table and
+ *   row consistency, and deletes the state directory on success.
  *
  * @param rowOptions Options for the row locking assertion
  */
 export function assertNoDeadlockRisk(rowOptions?: RowLockingOptions): void {
-  assertConsistentTableLocking()
-  assertConsistentRowLocking(rowOptions)
+  if (detectRunnerWorker()) return
+  if (isCoordinatorContext()) {
+    aggregateAndAssert({ rowOptions, cleanup: true })
+    return
+  }
+  const state = getGlobalState()
+  assertTableLocking(state.tableGraph)
+  assertRowLocking(state.rowGraphs, rowOptions)
 }
 
 /**

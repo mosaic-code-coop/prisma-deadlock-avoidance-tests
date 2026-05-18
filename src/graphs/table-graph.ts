@@ -1,4 +1,10 @@
-import { Graph, alg } from '@dagrejs/graphlib'
+// @dagrejs/graphlib is CJS-only and Node's named-export inference for its
+// `module.exports = { Graph, alg, ... }` shape is unreliable in Node 24+.
+// Default-import + destructure is the portable pattern for CJS deps from ESM.
+import graphlib from '@dagrejs/graphlib'
+import type { Graph as GraphType } from '@dagrejs/graphlib'
+const { Graph, alg } = graphlib
+type Graph = GraphType
 import type { CallerInfo, TableEdgeLabel, TableCycleInfo } from '../types.js'
 import { addCallerIfUnique } from '../utils/caller-extractor.js'
 
@@ -138,5 +144,21 @@ export class TableLockGraph {
    */
   getUnderlyingGraph(): Graph {
     return this.graph
+  }
+
+  /**
+   * Serialize to a plain JSON-safe value. Round-trips via `fromJSON`.
+   */
+  toJSON(): unknown {
+    return graphlib.json.write(this.graph)
+  }
+
+  /**
+   * Rebuild a TableLockGraph from data produced by `toJSON`.
+   */
+  static fromJSON(data: unknown): TableLockGraph {
+    const instance = new TableLockGraph()
+    instance.graph = graphlib.json.read(data as Parameters<typeof graphlib.json.read>[0])
+    return instance
   }
 }

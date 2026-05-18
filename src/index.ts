@@ -22,4 +22,5 @@ export type {
   TableCycleInfo,
   RowCycleInfo,
   DeadlockDetectionConfig,
+  DeadlockDetectionOptions,
 } from './types.js'

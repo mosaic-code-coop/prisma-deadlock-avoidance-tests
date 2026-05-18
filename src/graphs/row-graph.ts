@@ -1,4 +1,10 @@
-import { Graph, alg } from '@dagrejs/graphlib'
+// @dagrejs/graphlib is CJS-only and Node's named-export inference for its
+// `module.exports = { Graph, alg, ... }` shape is unreliable in Node 24+.
+// Default-import + destructure is the portable pattern for CJS deps from ESM.
+import graphlib from '@dagrejs/graphlib'
+import type { Graph as GraphType } from '@dagrejs/graphlib'
+const { Graph, alg } = graphlib
+type Graph = GraphType
 import type { CallerInfo, RowEdgeLabel, RowCycleInfo, StrictMode } from '../types.js'
 import { addCallerIfUnique, callerKey } from '../utils/caller-extractor.js'
 
@@ -255,5 +261,32 @@ export class RowLockGraphs {
    */
   reset(): void {
     this.graphs.clear()
+  }
+
+  /**
+   * Serialize to a plain JSON-safe value. Round-trips via `fromJSON`.
+   */
+  toJSON(): Record<string, unknown> {
+    const out: Record<string, unknown> = {}
+    for (const [table, graph] of this.graphs) {
+      out[table] = graphlib.json.write(graph)
+    }
+    return out
+  }
+
+  /**
+   * Rebuild a RowLockGraphs from data produced by `toJSON`.
+   */
+  static fromJSON(data: unknown): RowLockGraphs {
+    const instance = new RowLockGraphs()
+    if (data && typeof data === 'object') {
+      for (const [table, graphData] of Object.entries(data as Record<string, unknown>)) {
+        instance.graphs.set(
+          table,
+          graphlib.json.read(graphData as Parameters<typeof graphlib.json.read>[0])
+        )
+      }
+    }
+    return instance
   }
 }
