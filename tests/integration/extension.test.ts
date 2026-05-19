@@ -367,4 +367,78 @@ describe('Prisma Deadlock Detection Extension', () => {
       expect(() => assertConsistentTableLocking()).not.toThrow()
     })
   })
+
+  describe('auto-commit and batch transaction tracking', () => {
+    // Top-level suite shares state across tests, and the "inconsistent table
+    // ordering" test taints the graph with a cycle. Isolate this block so
+    // assertions only see edges from operations within each test.
+    beforeEach(() => {
+      resetDeadlockDetection()
+    })
+
+    afterEach(() => {
+      resetDeadlockDetection()
+    })
+
+    it('should not record edges between independent auto-commit operations', async () => {
+      const u = await prisma.user.create({
+        data: { email: uniqueEmail('x'), name: 'X' },
+      })
+      await prisma.$transaction(async (tx) => {
+        await tx.user.update({ where: { id: u.id }, data: { name: 'X1' } })
+        await tx.post.create({ data: { title: 'in-tx', authorId: u.id } })
+      })
+
+      const u2 = await prisma.user.create({
+        data: { email: uniqueEmail('y'), name: 'Y' },
+      })
+      await prisma.post.create({
+        data: { title: 'auto-commit', authorId: u2.id },
+      })
+      await prisma.user.create({
+        data: { email: uniqueEmail('z'), name: 'Z' },
+      })
+
+      expect(() => assertConsistentTableLocking()).not.toThrow()
+    })
+
+    it('should record consistent ordering in batch $transaction([...])', async () => {
+      const u = await prisma.user.create({
+        data: { email: uniqueEmail('b1'), name: 'B1' },
+      })
+      const p = await prisma.post.create({
+        data: { title: 'pre', authorId: u.id },
+      })
+
+      await prisma.$transaction([
+        prisma.user.update({ where: { id: u.id }, data: { name: 'B1u' } }),
+        prisma.post.update({ where: { id: p.id }, data: { title: 'pu' } }),
+      ])
+
+      expect(() => assertConsistentTableLocking()).not.toThrow()
+    })
+
+    it('should detect cycles introduced by batch $transaction([...])', async () => {
+      const u = await prisma.user.create({
+        data: { email: uniqueEmail('c1'), name: 'C1' },
+      })
+      await prisma.$transaction(async (tx) => {
+        await tx.user.update({ where: { id: u.id }, data: { name: 'C1u' } })
+        await tx.post.create({ data: { title: 'p1', authorId: u.id } })
+      })
+
+      const u2 = await prisma.user.create({
+        data: { email: uniqueEmail('c2'), name: 'C2' },
+      })
+      const p2 = await prisma.post.create({
+        data: { title: 'p2', authorId: u2.id },
+      })
+      await prisma.$transaction([
+        prisma.post.update({ where: { id: p2.id }, data: { title: 'p2u' } }),
+        prisma.user.update({ where: { id: u2.id }, data: { name: 'C2u' } }),
+      ])
+
+      expect(() => assertConsistentTableLocking()).toThrow(TableLockingAssertionError)
+    })
+  })
 })

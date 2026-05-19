@@ -150,16 +150,20 @@ async function withOperationTracking<T>(fn: () => Promise<T>): Promise<T> {
  */
 function recordTableLock(table: string, state: GlobalStateInstance): void {
   fireMissingParallelModeNoticeIfNeeded()
+
+  // Auto-commit operations release their locks before the next statement
+  // runs, so they cannot deadlock with adjacent statements. Only record
+  // edges inside a transaction batch. See REQUIREMENTS.md §1.1.
+  if (!state.inBatch) return
+
   const caller = extractCaller()
 
-  // Create edges from all previously locked tables to this one
   for (const prevTable of state.currentOperationTables) {
     if (prevTable !== table) {
       state.tableGraph.addEdge(prevTable, table, caller)
     }
   }
 
-  // Add this table to the current operation's locked tables
   if (!state.currentOperationTables.includes(table)) {
     state.currentOperationTables.push(table)
   }
@@ -383,20 +387,17 @@ export function withDeadlockDetection<T>(
   return new Proxy(extended, {
     get(target: PrismaLike, prop: string | symbol) {
       if (prop === '$transaction') {
-        // Return a wrapped $transaction method
-        return function (args: unknown) {
-          const originalMethod = target.$transaction as (args: unknown) => Promise<unknown>
+        return function (...callArgs: unknown[]) {
+          const originalMethod = target.$transaction as (...a: unknown[]) => Promise<unknown>
+          const firstArg = callArgs[0]
+          const isInteractive = typeof firstArg === 'function'
+          const isBatch = Array.isArray(firstArg)
 
-          // Check if this is an interactive transaction (callback-based)
-          const isInteractive = typeof args === 'function'
-
-          if (isInteractive && enabled) {
-            // Automatically wrap the transaction callback with tracking
-            return withOperationTracking(() => originalMethod.call(target, args))
+          if ((isInteractive || isBatch) && enabled) {
+            return withOperationTracking(() => originalMethod.apply(target, callArgs))
           }
 
-          // Batch transaction, disabled, or raw transaction - pass through
-          return originalMethod.call(target, args)
+          return originalMethod.apply(target, callArgs)
         }
       }
 
@@ -420,7 +421,7 @@ export function withDeadlockDetection<T>(
  *   to clean up after both assertions pass).
  */
 export function assertConsistentTableLocking(): void {
-  if (detectRunnerWorker()) return
+  if (isParallelModeActive() && detectRunnerWorker()) return
   if (isCoordinatorContext()) {
     aggregateAndAssert({ tableOnly: true })
     return
@@ -441,7 +442,7 @@ export function assertConsistentTableLocking(): void {
  * @param options Options controlling which tables to check and strictness mode
  */
 export function assertConsistentRowLocking(options?: RowLockingOptions): void {
-  if (detectRunnerWorker()) return
+  if (isParallelModeActive() && detectRunnerWorker()) return
   if (isCoordinatorContext()) {
     aggregateAndAssert({ rowOnly: true, rowOptions: options })
     return
@@ -461,7 +462,7 @@ export function assertConsistentRowLocking(options?: RowLockingOptions): void {
  * @param rowOptions Options for the row locking assertion
  */
 export function assertNoDeadlockRisk(rowOptions?: RowLockingOptions): void {
-  if (detectRunnerWorker()) return
+  if (isParallelModeActive() && detectRunnerWorker()) return
   if (isCoordinatorContext()) {
     aggregateAndAssert({ rowOptions, cleanup: true })
     return

@@ -145,11 +145,19 @@ describe('parallel mode aggregation', () => {
 })
 
 describe('parallel mode hook registration', () => {
+  let savedRunId: string | undefined
+
   beforeEach(() => {
+    savedRunId = process.env.DEADLOCK_RUN_ID
     _resetParallelModeForTests()
   })
 
   afterEach(() => {
+    if (savedRunId === undefined) {
+      delete process.env.DEADLOCK_RUN_ID
+    } else {
+      process.env.DEADLOCK_RUN_ID = savedRunId
+    }
     _resetParallelModeForTests()
   })
 

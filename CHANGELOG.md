@@ -1,3 +1,37 @@
+# 0.2.1 (2026-05-19)
+
+### Bug Fixes
+
+- **false-positive cycles between independent auto-commit operations:**
+  `recordTableLock` unconditionally added a graph edge from every
+  previously-recorded table to the current one, and `currentOperationTables`
+  was only ever reset on `$transaction` entry/exit. As a result, two
+  sequential non-transactional locking ops (e.g. `prisma.user.create()` then
+  `prisma.post.create()` in a test fixture) recorded a `User → Post` edge
+  even though at the DB level each statement runs in its own auto-commit
+  transaction and cannot deadlock with the next. Gate edge recording on
+  `state.inBatch` so only operations inside a transaction contribute to the
+  graph.
+- **batch-form `$transaction([...])` now tracked:** the `$transaction` proxy
+  only wrapped the interactive (function) form in `withOperationTracking`,
+  so batch-form transactions never flipped `inBatch=true`. They incidentally
+  still produced edges via the unconditional `recordTableLock` (along with
+  spurious bleed-over from adjacent statements). Now batch transactions are
+  wrapped too, so their cross-table ordering is recorded as a real batch
+  while auto-commit edges are dropped. The proxy also forwards all
+  positional arguments, so the optional second-arg options object (e.g.
+  `isolationLevel`, `timeout`) is no longer silently dropped.
+- **assertions silently no-op'd under vitest/jest without parallel mode:**
+  `assertConsistentTableLocking`, `assertConsistentRowLocking`, and
+  `assertNoDeadlockRisk` short-circuited on `detectRunnerWorker()` whenever
+  a runner env var (`VITEST_POOL_ID`, `JEST_WORKER_ID`,
+  `NODE_TEST_CONTEXT`) was set, regardless of whether parallel mode was
+  enabled. With vitest's `singleFork: true` (or any single-process run),
+  `VITEST_POOL_ID` is still set, so the assertions returned without
+  checking and cycles went undetected. Gate the worker early-return on
+  `isParallelModeActive() && detectRunnerWorker()` so the worker-defers-to-
+  coordinator path only fires when parallel mode is genuinely on.
+
 # 0.2.0 (2026-05-18)
 
 ### Features
