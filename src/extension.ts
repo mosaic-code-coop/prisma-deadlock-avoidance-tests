@@ -484,6 +484,10 @@ export function resetDeadlockDetection(): void {
  * Wrapper function for tracking operations from prisma-lock-for-update.
  * Use this to wrap forUpdate calls so they're tracked in the deadlock detection graph.
  *
+ * Must be called inside a `$transaction` callback — outside one, table-lock
+ * recording is a no-op (SELECT FOR UPDATE outside a transaction releases its
+ * locks immediately and cannot participate in a deadlock cycle).
+ *
  * @param model The model name (e.g., 'User', 'Post')
  * @param fn The async function that performs the forUpdate operation
  * @returns The result of the operation
